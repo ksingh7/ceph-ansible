@@ -240,6 +240,7 @@
     shell: "ps awux | grep -v grep | grep -q -- ceph-"
     register: check_for_running_ceph
     failed_when: check_for_running_ceph.rc == 0
+    ignore_errors: true
 
   - name: see if ceph-disk-created data partitions are present
     shell: "ls /dev/disk/by-partlabel | grep -q 'ceph\\\\x20data'"
