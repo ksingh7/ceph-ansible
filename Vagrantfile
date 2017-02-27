@@ -2,34 +2,38 @@
 # vi: set ft=ruby :
 
 require 'yaml'
+require 'time'
 VAGRANTFILE_API_VERSION = '2'
+
+DEBUG = false
 
 config_file=File.expand_path(File.join(File.dirname(__FILE__), 'vagrant_variables.yml'))
 settings=YAML.load_file(config_file)
 
-NMONS      = settings['mon_vms']
-NOSDS      = settings['osd_vms']
-NMDSS      = settings['mds_vms']
-NRGWS      = settings['rgw_vms']
-RESTAPI    = settings['restapi']
-CLIENTS    = settings['client_vms']
-SUBNET     = settings['subnet']
-BOX        = settings['vagrant_box']
-MEMORY     = settings['memory']
-STORAGECTL = settings['vagrant_storagectl']
-ETH        = settings['eth']
-DOCKER     = settings['docker']
+LABEL_PREFIX   = settings['label_prefix'] ? settings['label_prefix'] + "-" : ""
+NMONS          = settings['mon_vms']
+NOSDS          = settings['osd_vms']
+NMDSS          = settings['mds_vms']
+NRGWS          = settings['rgw_vms']
+NNFSS          = settings['nfs_vms']
+RESTAPI        = settings['restapi']
+NRBD_MIRRORS   = settings['rbd_mirror_vms']
+CLIENTS        = settings['client_vms']
+NISCSI_GWS     = settings['iscsi_gw_vms']
+PUBLIC_SUBNET  = settings['public_subnet']
+CLUSTER_SUBNET = settings['cluster_subnet']
+BOX            = settings['vagrant_box']
+BOX_URL        = settings['vagrant_box_url']
+SYNC_DIR       = settings['vagrant_sync_dir']
+MEMORY         = settings['memory']
+ETH            = settings['eth']
+DOCKER         = settings['docker']
+USER           = settings['ssh_username']
 
-if BOX == 'openstack'
-  require 'vagrant-openstack-provider'
-  OSVM = true
-  USER = settings['os_ssh_username']
-  OSUSER = settings['os_username']
-  OSPREFIX = "#{OSUSER}-"
-else
-  OSVM = false
-  OSPREFIX = ""
-end
+ASSIGN_STATIC_IP = !(BOX == 'openstack' or BOX == 'linode')
+DISABLE_SYNCED_FOLDER = settings.fetch('vagrant_disable_synced_folder', false)
+DISK_UUID = Time.now.utc.to_i
+
 
 ansible_provision = proc do |ansible|
   if DOCKER then
@@ -45,48 +49,69 @@ ansible_provision = proc do |ansible|
   # these aren't supported by Vagrant, see
   # https://github.com/mitchellh/vagrant/issues/3539
   ansible.groups = {
-    'mons'        => (0..NMONS - 1).map { |j| "#{OSPREFIX}mon#{j}" },
-    'osds'        => (0..NOSDS - 1).map { |j| "#{OSPREFIX}osd#{j}" },
-    'mdss'        => (0..NMDSS - 1).map { |j| "#{OSPREFIX}mds#{j}" },
-    'rgws'        => (0..NRGWS - 1).map { |j| "#{OSPREFIX}rgw#{j}" },
-    'clients'     => (0..CLIENTS - 1).map { |j| "#{OSPREFIX}client#{j}" }
+    'mons'            => (0..NMONS - 1).map { |j| "#{LABEL_PREFIX}mon#{j}" },
+    'osds'            => (0..NOSDS - 1).map { |j| "#{LABEL_PREFIX}osd#{j}" },
+    'mdss'            => (0..NMDSS - 1).map { |j| "#{LABEL_PREFIX}mds#{j}" },
+    'rgws'            => (0..NRGWS - 1).map { |j| "#{LABEL_PREFIX}rgw#{j}" },
+    'nfss'            => (0..NNFSS - 1).map { |j| "#{LABEL_PREFIX}nfs#{j}" },
+    'rbd_mirrors'     => (0..NRBD_MIRRORS - 1).map { |j| "#{LABEL_PREFIX}rbd_mirror#{j}" },
+    'clients'         => (0..CLIENTS - 1).map { |j| "#{LABEL_PREFIX}client#{j}" },
+    'iscsi_gw'        => (0..NISCSI_GWS - 1).map { |j| "#{LABEL_PREFIX}iscsi_gw#{j}" }
   }
 
   if RESTAPI then
-    ansible.groups['restapis'] = (0..NMONS - 1).map { |j| "#{OSPREFIX}mon#{j}" }
+    ansible.groups['restapis'] = (0..NMONS - 1).map { |j| "#{LABEL_PREFIX}mon#{j}" }
   end
 
+  ansible.extra_vars = {
+      cluster_network: "#{CLUSTER_SUBNET}.0/24",
+      journal_size: 100,
+      public_network: "#{PUBLIC_SUBNET}.0/24",
+  }
 
   # In a production deployment, these should be secret
   if DOCKER then
-    ansible.extra_vars = {
+    ansible.extra_vars = ansible.extra_vars.merge({
       mon_containerized_deployment: 'true',
       osd_containerized_deployment: 'true',
       mds_containerized_deployment: 'true',
       rgw_containerized_deployment: 'true',
+      nfs_containerized_deployment: 'true',
       restapi_containerized_deployment: 'true',
+      rbd_mirror_containerized_deployment: 'true',
       ceph_mon_docker_interface: ETH,
-      ceph_mon_docker_subnet: "#{SUBNET}.0/24",
-      ceph_osd_docker_extra_env: "CEPH_DAEMON=OSD_CEPH_DISK,OSD_JOURNAL_SIZE=100",
-      cluster_network: "#{SUBNET}.0/24",
-      public_network: "#{SUBNET}.0/24",
+      ceph_mon_docker_subnet: "#{PUBLIC_SUBNET}.0/24",
       ceph_osd_docker_devices: settings['disks'],
-      # Note that OSVM is defaulted to false above
-      ceph_docker_on_openstack: OSVM,
-      ceph_rgw_civetweb_port: 8080
-    }
-  else
-    ansible.extra_vars = {
-      "ceph_#{settings['ceph_install_source']}"=> 'true',
-      journal_collocation: 'true',
-      pool_default_size: '2',
-      journal_size: 100,
-      monitor_interface: ETH,
-      cluster_network: "#{SUBNET}.0/24",
-      public_network: "#{SUBNET}.0/24",
       devices: settings['disks'],
-      os_tuning_params: settings['os_tuning_params']
-    }
+      ceph_docker_on_openstack: BOX == 'openstack',
+      ceph_rgw_civetweb_port: 8080,
+      generate_fsid: 'true',
+    })
+  else
+    ansible.extra_vars = ansible.extra_vars.merge({
+      devices: settings['disks'],
+      journal_collocation: 'true',
+      monitor_interface: ETH,
+      os_tuning_params: settings['os_tuning_params'],
+      pool_default_size: '2',
+    })
+  end
+
+  if BOX == 'linode' then
+    ansible.sudo = true
+    # Use monitor_address_block instead of monitor_interface:
+    ansible.extra_vars.delete(:monitor_interface)
+    ansible.extra_vars = ansible.extra_vars.merge({
+      cluster_network: "#{CLUSTER_SUBNET}.0/16",
+      devices: ['/dev/sdc'], # hardcode leftover disk
+      journal_collocation: 'true',
+      monitor_address_block: "#{PUBLIC_SUBNET}.0/16",
+      public_network: "#{PUBLIC_SUBNET}.0/16",
+    })
+  end
+
+  if DEBUG then
+    ansible.verbose = '-vvv'
   end
   ansible.limit = 'all'
 end
@@ -100,19 +125,25 @@ end
 
 Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   config.vm.box = BOX
+  config.vm.box_url = BOX_URL
   config.ssh.insert_key = false # workaround for https://github.com/mitchellh/vagrant/issues/5048
+  config.ssh.private_key_path = settings['ssh_private_key_path']
+  config.ssh.username = USER
 
-  # Faster bootup.  Disable if you need this for libvirt
-  config.vm.provider :libvirt do |v,override|
-    override.vm.synced_folder '.', '/home/vagrant/sync', disabled: true
+  # Faster bootup. Disables mounting the sync folder for libvirt and virtualbox
+  if DISABLE_SYNCED_FOLDER
+    config.vm.provider :virtualbox do |v,override|
+      override.vm.synced_folder '.', SYNC_DIR, disabled: true
+    end
+    config.vm.provider :libvirt do |v,override|
+      override.vm.synced_folder '.', SYNC_DIR, disabled: true
+    end
   end
 
   if BOX == 'openstack'
     # OpenStack VMs
     config.vm.provider :openstack do |os|
       config.vm.synced_folder ".", "/home/#{USER}/vagrant", disabled: true
-      config.ssh.username = USER
-      config.ssh.private_key_path = settings['os_ssh_private_key_path']
       config.ssh.pty = true
       os.openstack_auth_url = settings['os_openstack_auth_url']
       os.username = settings['os_username']
@@ -123,15 +154,37 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
       os.image = settings['os_image']
       os.keypair_name = settings['os_keypair_name']
       os.security_groups = ['default']
+
+      if settings['os.networks'] then
+        os.networks = settings['os_networks']
+      end
+
+      if settings['os.floating_ip_pool'] then
+        os.floating_ip_pool = settings['os_floating_ip_pool']
+      end
+
       config.vm.provision "shell", inline: "true", upload_path: "/home/#{USER}/vagrant-shell"
+    end
+  elsif BOX == 'linode'
+    config.vm.provider :linode do |provider, override|
+      provider.token = ENV['LINODE_API_KEY']
+      provider.distribution = settings['cloud_distribution'] # 'Ubuntu 16.04 LTS'
+      provider.datacenter = settings['cloud_datacenter']
+      provider.plan = MEMORY.to_s
+      provider.private_networking = true
+      # root install generally takes <1GB
+      provider.xvda_size = 4*1024
+      # add some swap as the Linode distros require it
+      provider.swap_size = 128
     end
   end
 
   (0..CLIENTS - 1).each do |i|
-    config.vm.define "#{OSPREFIX}client#{i}" do |client|
-      client.vm.hostname = "#{OSPREFIX}ceph-client#{i}"
-      if !OSVM
-        client.vm.network :private_network, ip: "#{SUBNET}.4#{i}"
+    config.vm.define "#{LABEL_PREFIX}client#{i}" do |client|
+      client.vm.hostname = "#{LABEL_PREFIX}ceph-client#{i}"
+      if ASSIGN_STATIC_IP
+        client.vm.network :private_network,
+          ip: "#{PUBLIC_SUBNET}.4#{i}"
       end
       # Virtualbox
       client.vm.provider :virtualbox do |vb|
@@ -146,6 +199,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
       # Libvirt
       client.vm.provider :libvirt do |lv|
         lv.memory = MEMORY
+        lv.random_hostname = true
       end
 
       # Parallels
@@ -153,14 +207,19 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
         prl.name = "ceph-client#{i}"
         prl.memory = "#{MEMORY}"
       end
+
+      client.vm.provider :linode do |provider|
+        provider.label = client.vm.hostname
+      end
     end
   end
 
   (0..NRGWS - 1).each do |i|
-    config.vm.define "#{OSPREFIX}rgw#{i}" do |rgw|
-      rgw.vm.hostname = "#{OSPREFIX}ceph-rgw#{i}"
-      if !OSVM
-        rgw.vm.network :private_network, ip: "#{SUBNET}.5#{i}"
+    config.vm.define "#{LABEL_PREFIX}rgw#{i}" do |rgw|
+      rgw.vm.hostname = "#{LABEL_PREFIX}ceph-rgw#{i}"
+      if ASSIGN_STATIC_IP
+        rgw.vm.network :private_network,
+          ip: "#{PUBLIC_SUBNET}.5#{i}"
       end
 
       # Virtualbox
@@ -176,6 +235,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
       # Libvirt
       rgw.vm.provider :libvirt do |lv|
         lv.memory = MEMORY
+        lv.random_hostname = true
       end
 
       # Parallels
@@ -183,14 +243,55 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
         prl.name = "ceph-rgw#{i}"
         prl.memory = "#{MEMORY}"
       end
+
+      rgw.vm.provider :linode do |provider|
+        provider.label = rgw.vm.hostname
+      end
+    end
+  end
+
+  (0..NNFSS - 1).each do |i|
+    config.vm.define "nfs#{i}" do |nfs|
+      nfs.vm.hostname = "ceph-nfs#{i}"
+      if ASSIGN_STATIC_IP
+        nfs.vm.network :private_network,
+          ip: "#{PUBLIC_SUBNET}.6#{i}"
+      end
+
+      # Virtualbox
+      nfs.vm.provider :virtualbox do |vb|
+        vb.customize ['modifyvm', :id, '--memory', "#{MEMORY}"]
+      end
+
+      # VMware
+      nfs.vm.provider :vmware_fusion do |v|
+        v.vmx['memsize'] = "#{MEMORY}"
+      end
+
+      # Libvirt
+      nfs.vm.provider :libvirt do |lv|
+        lv.memory = MEMORY
+        lv.random_hostname = true
+      end
+
+      # Parallels
+      nfs.vm.provider "parallels" do |prl|
+        prl.name = "ceph-nfs#{i}"
+        prl.memory = "#{MEMORY}"
+      end
+
+      nfs.vm.provider :linode do |provider|
+        provider.label = nfs.vm.hostname
+      end
     end
   end
 
   (0..NMDSS - 1).each do |i|
-    config.vm.define "#{OSPREFIX}mds#{i}" do |mds|
-      mds.vm.hostname = "#{OSPREFIX}ceph-mds#{i}"
-      if !OSVM
-        mds.vm.network :private_network, ip: "#{SUBNET}.7#{i}"
+    config.vm.define "#{LABEL_PREFIX}mds#{i}" do |mds|
+      mds.vm.hostname = "#{LABEL_PREFIX}ceph-mds#{i}"
+      if ASSIGN_STATIC_IP
+        mds.vm.network :private_network,
+          ip: "#{PUBLIC_SUBNET}.7#{i}"
       end
       # Virtualbox
       mds.vm.provider :virtualbox do |vb|
@@ -205,20 +306,94 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
       # Libvirt
       mds.vm.provider :libvirt do |lv|
         lv.memory = MEMORY
+        lv.random_hostname = true
       end
       # Parallels
       mds.vm.provider "parallels" do |prl|
         prl.name = "ceph-mds#{i}"
         prl.memory = "#{MEMORY}"
       end
+
+      mds.vm.provider :linode do |provider|
+        provider.label = mds.vm.hostname
+      end
+    end
+  end
+
+  (0..NRBD_MIRRORS - 1).each do |i|
+    config.vm.define "#{LABEL_PREFIX}rbd_mirror#{i}" do |rbd_mirror|
+      rbd_mirror.vm.hostname = "#{LABEL_PREFIX}ceph-rbd-mirror#{i}"
+      if ASSIGN_STATIC_IP
+        rbd_mirror.vm.network :private_network,
+          ip: "#{PUBLIC_SUBNET}.8#{i}"
+      end
+      # Virtualbox
+      rbd_mirror.vm.provider :virtualbox do |vb|
+        vb.customize ['modifyvm', :id, '--memory', "#{MEMORY}"]
+      end
+
+      # VMware
+      rbd_mirror.vm.provider :vmware_fusion do |v|
+        v.vmx['memsize'] = "#{MEMORY}"
+      end
+
+      # Libvirt
+      rbd_mirror.vm.provider :libvirt do |lv|
+        lv.memory = MEMORY
+        lv.random_hostname = true
+      end
+      # Parallels
+      rbd_mirror.vm.provider "parallels" do |prl|
+        prl.name = "ceph-rbd-mirror#{i}"
+        prl.memory = "#{MEMORY}"
+      end
+
+      rbd_mirror.vm.provider :linode do |provider|
+        provider.label = rbd_mirror.vm.hostname
+      end
+    end
+  end
+
+  (0..NISCSI_GWS - 1).each do |i|
+    config.vm.define "#{LABEL_PREFIX}iscsi_gw#{i}" do |iscsi_gw|
+      iscsi_gw.vm.hostname = "#{LABEL_PREFIX}ceph-iscsi-gw#{i}"
+      if ASSIGN_STATIC_IP
+        iscsi_gw.vm.network :private_network,
+          ip: "#{PUBLIC_SUBNET}.9#{i}"
+      end
+      # Virtualbox
+      iscsi_gw.vm.provider :virtualbox do |vb|
+        vb.customize ['modifyvm', :id, '--memory', "#{MEMORY}"]
+      end
+
+      # VMware
+      iscsi_gw.vm.provider :vmware_fusion do |v|
+        v.vmx['memsize'] = "#{MEMORY}"
+      end
+
+      # Libvirt
+      iscsi_gw.vm.provider :libvirt do |lv|
+        lv.memory = MEMORY
+        lv.random_hostname = true
+      end
+      # Parallels
+      iscsi_gw.vm.provider "parallels" do |prl|
+        prl.name = "ceph-iscsi-gw#{i}"
+        prl.memory = "#{MEMORY}"
+      end
+
+      iscsi_gw.vm.provider :linode do |provider|
+        provider.label = iscsi_gw.vm.hostname
+      end
     end
   end
 
   (0..NMONS - 1).each do |i|
-    config.vm.define "#{OSPREFIX}mon#{i}" do |mon|
-      mon.vm.hostname = "#{OSPREFIX}ceph-mon#{i}"
-      if !OSVM
-        mon.vm.network :private_network, ip: "#{SUBNET}.1#{i}"
+    config.vm.define "#{LABEL_PREFIX}mon#{i}" do |mon|
+      mon.vm.hostname = "#{LABEL_PREFIX}ceph-mon#{i}"
+      if ASSIGN_STATIC_IP
+        mon.vm.network :private_network,
+          ip: "#{PUBLIC_SUBNET}.1#{i}"
       end
       # Virtualbox
       mon.vm.provider :virtualbox do |vb|
@@ -233,6 +408,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
       # Libvirt
       mon.vm.provider :libvirt do |lv|
         lv.memory = MEMORY
+        lv.random_hostname = true
       end
 
       # Parallels
@@ -240,27 +416,34 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
         prl.name = "ceph-mon#{i}"
         prl.memory = "#{MEMORY}"
       end
+
+      mon.vm.provider :linode do |provider|
+        provider.label = mon.vm.hostname
+      end
     end
   end
 
   (0..NOSDS - 1).each do |i|
-    config.vm.define "#{OSPREFIX}osd#{i}" do |osd|
-      osd.vm.hostname = "#{OSPREFIX}ceph-osd#{i}"
-      if !OSVM
-        osd.vm.network :private_network, ip: "#{SUBNET}.10#{i}"
-        osd.vm.network :private_network, ip: "#{SUBNET}.20#{i}"
+    config.vm.define "#{LABEL_PREFIX}osd#{i}" do |osd|
+      osd.vm.hostname = "#{LABEL_PREFIX}ceph-osd#{i}"
+      if ASSIGN_STATIC_IP
+        osd.vm.network :private_network,
+          ip: "#{PUBLIC_SUBNET}.10#{i}"
+        osd.vm.network :private_network,
+          ip: "#{CLUSTER_SUBNET}.20#{i}"
       end
       # Virtualbox
       osd.vm.provider :virtualbox do |vb|
+        # Create our own controller for consistency and to remove VM dependency
+        vb.customize ['storagectl', :id,
+                      '--name', 'OSD Controller',
+                      '--add', 'scsi']
         (0..1).each do |d|
           vb.customize ['createhd',
                         '--filename', "disk-#{i}-#{d}",
                         '--size', '11000'] unless File.exist?("disk-#{i}-#{d}.vdi")
-          # Controller names are dependent on the VM being built.
-          # It is set when the base box is made in our case ubuntu/trusty64.
-          # Be careful while changing the box.
           vb.customize ['storageattach', :id,
-                        '--storagectl', STORAGECTL,
+                        '--storagectl', 'OSD Controller',
                         '--port', 3 + d,
                         '--device', 0,
                         '--type', 'hdd',
@@ -280,12 +463,15 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
       end
 
       # Libvirt
-      driverletters = ('b'..'z').to_a
+      driverletters = ('a'..'z').to_a
       osd.vm.provider :libvirt do |lv|
-        (0..1).each do |d|
-          lv.storage :file, :device => "vd#{driverletters[d]}", :path => "disk-#{i}-#{d}.disk", :size => '11G'
+        # always make /dev/sd{a/b/c} so that CI can ensure that
+        # virtualbox and libvirt will have the same devices to use for OSDs
+        (0..2).each do |d|
+          lv.storage :file, :device => "hd#{driverletters[d]}", :path => "disk-#{i}-#{d}-#{DISK_UUID}.disk", :size => '12G', :bus => "ide"
         end
         lv.memory = MEMORY
+        lv.random_hostname = true
       end
 
       # Parallels
@@ -299,6 +485,10 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
                          "--iface",
                          "sata"]
         end
+      end
+
+      osd.vm.provider :linode do |provider|
+        provider.label = osd.vm.hostname
       end
 
       # Run the provisioner after the last machine comes up

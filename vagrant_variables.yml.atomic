@@ -7,24 +7,27 @@ mon_vms: 1
 osd_vms: 1
 mds_vms: 0
 rgw_vms: 0
+nfs_vms: 0
+rbd_mirror_vms: 0
 client_vms: 0
+iscsi_gw_vms: 0
 
 # Deploy RESTAPI on each of the Monitors
 #restapi: false
 
-# SUBNET TO USE FOR THE VMS
-subnet: 192.168.0
+# SUBNETS TO USE FOR THE VMS
+public_subnet: 192.168.0
+cluster_subnet: 192.168.1
 
 # MEMORY
 memory: 1024
 
-disks: "[ '/dev/sdb', '/dev/sdc' ]"
+disks: "[ '/dev/sda', '/dev/sdb' ]"
 
 eth: 'enp0s8'
 vagrant_box: centos/atomic-host
+# The sync directory changes based on vagrant box
+# Set to /home/vagrant/sync for Centos/7, /home/{ user }/vagrant for openstack and defaults to /vagrant
+vagrant_sync_dir: /home/vagrant/sync
 
-# if vagrant fails to attach storage controller, add the storage controller name by:
-# VBoxManage storagectl `VBoxManage list vms |grep ceph-ansible_osd0|awk '{print $1}'|tr \" ' '` --name "SATA" --add sata
-# and "vagrant up" again
-vagrant_storagectl: 'SATA'
 skip_tags: 'with_pkg'

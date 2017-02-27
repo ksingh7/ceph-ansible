@@ -3,17 +3,15 @@
 # ISOs have MON, OSD, Tools, and Agent. If ISOs change the layout or provide
 # certain repos depending on the type of node this task will require a more
 # intelligent way to determine the location of the key.
-- name: install the rh ceph storage repository key
+- name: install the red hat ceph storage repository key
   apt_key:
-    file: "{{ ceph_stable_rh_storage_repository_path }}/MON/release.asc"
+    file: "{{ ceph_rhcs_repository_path }}/MON/release.asc"
     state: present
-  when:
-    - ceph_stable_rh_storage
-    - ceph_stable_rh_storage_iso_install
+  when: ceph_rhcs_iso_install
 
-- name: add rh ceph storage repositories
+- name: add red hat ceph storage repositories
   apt_repository:
-    repo: "deb file://{{ ceph_stable_rh_storage_repository_path }}/{{ item }}/ {{ ansible_lsb.codename }} main"
+    repo: "deb file://{{ ceph_rhcs_repository_path }}/{{ item }}/ {{ ansible_lsb.codename }} main"
     state: present
   changed_when: false
   with_items:
@@ -21,15 +19,21 @@
     - "OSD"
     - "Tools"
     - "Agent"
-  when:
-    - ceph_stable_rh_storage
-    - ceph_stable_rh_storage_iso_install
+  when: ceph_rhcs_iso_install
 
-- name: add the red hat storage apt-key
+- name: set apt pinning for red hat ceph storage
+  template:
+    src: "{{ role_path }}/templates/rhcs.pref.j2"
+    dest: /etc/apt/preferences.d/rhcs.pref
+    owner: root
+    group: root
+    mode: 0644
+
+- name: add red hat storage apt-key
   apt_key:
-    url: "https://www.redhat.com/security/fd431d51.txt"
+    data: "{{ lookup('file', role_path+'/files/cephstablerhcs.asc') }}"
     state: present
-  when: not ceph_stable_rh_storage_iso_install
+  when: not ceph_rhcs_iso_install
 
 - name: install dependencies
   apt:
@@ -37,7 +41,7 @@
     state: present
     update_cache: yes
     cache_valid_time: 3600
-  with_items: debian_package_dependencies
+  with_items: "{{ debian_package_dependencies }}"
 
 - name: install red hat storage ceph mon
   apt:
@@ -69,8 +73,20 @@
     state: "{{ (upgrade_ceph_packages|bool) | ternary('latest','present') }}"
   when: mds_group_name in group_names
 
+- name: install red hat storage ceph-fuse client
+  apt:
+    pkg: ceph-fuse
+    state: "{{ (upgrade_ceph_packages|bool) | ternary('latest','present') }}"
+  when: client_group_name in group_names
+
 - name: install red hat storage ceph-common
   apt:
     pkg: ceph-common
     state: "{{ (upgrade_ceph_packages|bool) | ternary('latest','present') }}"
   when: client_group_name in group_names
+
+- name: install red hat storage nfs gateway
+  apt:
+    name: nfs-ganesha
+    state: "{{ (upgrade_ceph_packages|bool) | ternary('latest','present') }}"
+  when: nfs_group_name in group_names

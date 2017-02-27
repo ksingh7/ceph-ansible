@@ -1,25 +1,28 @@
 ---
 - name: get osd path
   shell: "df | grep {{ item }} | awk '{print $6}'"
-  with_items: devices
+  with_items: "{{ devices }}"
   changed_when: false
   failed_when: false
+  always_run: true
   register: osd_path
   when: not osd_directory
 
 - name: get osd id
   command: cat {{ item.stdout }}/whoami
-  with_items: osd_path.results
+  with_items: "{{ osd_path.results }}"
   changed_when: false
   failed_when: false
+  always_run: true
   register: osd_id_non_dir_scenario
   when: not osd_directory
 
 - name: get osd id for directory scenario
   command: cat {{ item.stdout }}/whoami
-  with_items: osd_directories
+  with_items: "{{ osd_directories }}"
   changed_when: false
   failed_when: false
+  always_run: true
   register: osd_id_dir_scenario
   when: osd_directory
 
@@ -33,9 +36,9 @@
   file:
     path: "{{ item }}"
     state: directory
-    owner: "{{ dir_owner }}"
-    group: "{{ dir_group }}"
-    mode: "{{ dir_mode }}"
+    owner: "ceph"
+    group: "ceph"
+    mode: "0755"
   with_items:
     - /etc/ceph/ceph.d/
     - /etc/ceph/ceph.d/osd_fragments
@@ -44,10 +47,10 @@
   template:
     src: osd.conf.j2
     dest: /etc/ceph/ceph.d/osd_fragments/osd.{{ item.stdout }}.conf
-    owner: "{{ dir_owner }}"
-    group: "{{ dir_group }}"
-    mode: "{{ activate_file_mode }}"
-  with_items: combined_osd_id.results
+    owner: "ceph"
+    group: "ceph"
+    mode: "0644"
+  with_items: "{{ combined_osd_id.results }}"
 
 - name: copy {{ cluster }}.conf for assembling
   command: cp /etc/ceph/{{ cluster }}.conf /etc/ceph/ceph.d/
@@ -57,14 +60,14 @@
   assemble:
     src: /etc/ceph/ceph.d/osd_fragments/
     dest: /etc/ceph/ceph.d/osd.conf
-    owner: "{{ dir_owner }}"
-    group: "{{ dir_group }}"
-    mode: "{{ activate_file_mode }}"
+    owner: "ceph"
+    group: "ceph"
+    mode: "0644"
 
 - name: assemble {{ cluster }}.conf and osd fragments
   assemble:
     src: /etc/ceph/ceph.d/
     dest: /etc/ceph/{{ cluster }}.conf
-    owner: "{{ dir_owner }}"
-    group: "{{ dir_group }}"
-    mode: "{{ activate_file_mode }}"
+    owner: "ceph"
+    group: "ceph"
+    mode: "0644"

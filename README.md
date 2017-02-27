@@ -48,13 +48,16 @@ ceph_conf_overrides:
      osd mkfs type: ext4
 ```
 
-**Note:** we will no longer accept pull requests that modify the ceph.conf template unless it helps the deployment. For simple configuration tweaks
+### Note
+* It is not recommended to use underscores when defining options in the `ceph_conf_overrides` variable (ex. osd_mkfs_type) as this may cause issues with
+incorrect configuration options appearing in ceph.conf.
+* We will no longer accept pull requests that modify the ceph.conf template unless it helps the deployment. For simple configuration tweaks
 please use the `ceph_conf_overrides` variable.
 
 ## Special notes
 
 If you are looking at deploying a Ceph version older than Jewel.
-It is highly recommended that you apply the following settings to your `group_vars/all` file on the `ceph_conf_overrides` variable:
+It is highly recommended that you apply the following settings to your `group_vars/all.yml` file on the `ceph_conf_overrides` variable:
 
 ```
 ceph_conf_overrides:
@@ -100,6 +103,11 @@ osd deep scrub stride | 1048576 | 524288
 osd scrub chunk max | 5 | 25
 
 If you want to use them, just use the `ceph_conf_overrides` variable as explained above.
+
+## FAQ
+
+1. I want to have OSD numbers seriallized between hosts, so the first OSD node has osd 1,2,3 and the second has osd 4,5,6 etc. How can I do this?
+Simply add `serial: 1` after the osd section `- hosts: osds` in your `site.yml` file.
 
 ## Setup with Vagrant using virtualbox provider
 
@@ -166,15 +174,13 @@ $ vagrant provision
 
 The Vagrantfile specifies an fsid for the cluster and a secret key for the
 monitor. If using these playbooks in production, you must generate your own `fsid`
-in `group_vars/all` and `monitor_secret` in `group_vars/mons`. Those files contain
+in `group_vars/all.yml` and `monitor_secret` in `group_vars/mons.yml`. Those files contain
 information about how to generate appropriate values for these variables.
 
 ## Specifying package origin
 
 By default, ceph-common installs from Ceph repository. However, you
 can set `ceph_origin` to "distro" to install Ceph from your default repository.
-
-Moreover for people looking to install any version of Ceph prior to the Jewel release on a Red Hat based system you would have to set `use_server_package_split: false`.
 
 ## Setup for Vagrant using libvirt provider
 
@@ -240,9 +246,9 @@ Attention, ceph-common doesn't manage backports repository, you must add it your
 ### For Atomic systems
 
 If you want to run containerized deployment on Atomic systems (RHEL/CentOS Atomic), please copy
-[vagrant.yml.atomic](vagrant_variables.yml.atomic) to vagrant_variables.yml, and copy [group_vars/all.docker](group_vars/all.docker) to `group_vars/all`.
+[vagrant_variables.yml.atomic](vagrant_variables.yml.atomic) to vagrant_variables.yml, and copy [group_vars/all.docker.yml.sample](group_vars/all.docker.yml.sample) to `group_vars/all.yml`.
 
-Since `centos/atomic-host` doesn't have spare storage controller to attach more disks, it is likely the first time `vagrant up --provider=virtualbox` runs, it will fail to attach to a storage controller. In such case, run the following command:
+Since `centos/atomic-host` VirtualBox box doesn't have spare storage controller to attach more disks, it is likely the first time `vagrant up --provider=virtualbox` runs, it will fail to attach to a storage controller. In such case, run the following command:
 
 ```console
 VBoxManage storagectl `VBoxManage list vms |grep ceph-ansible_osd0|awk '{print $1}'|tr \" ' '` --name "SATA" --add sata
@@ -256,7 +262,7 @@ Install the Vagrant plugin for the openstack provider: `vagrant plugin install v
 
 ```bash
 $ cp site.yml.sample site.yml
-$ cp group_vars/all.docker.sample group_vars/all
+$ cp group_vars/all.docker.yml.sample group_vars/all.yml
 $ cp vagrant_variables.yml.openstack vagrant_variables.yml
 ```
 * Edit `vagrant_variables.yml`:
@@ -295,6 +301,16 @@ Read this carefully then :).
 The repository centralises all the Ansible roles.
 The roles are all part of the Galaxy.
 We love contribution and we love giving visibility to our contributors, this is why all the **commits must be signed-off**.
+
+## Tools
+### Mailing list
+Please register the mailing list at http://lists.ceph.com/listinfo.cgi/ceph-ansible-ceph.com
+
+### IRC
+Feel free to join us in the channel #ceph-ansible of the OFTC servers
+
+### Github
+The maing github account for the project is at https://github.com/ceph/ceph-ansible/
 
 ## Submit a patch
 

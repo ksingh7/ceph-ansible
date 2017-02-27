@@ -1,13 +1,15 @@
 ---
 - name: check if a cluster is already running
-  shell: "docker ps | grep -sq 'ceph/daemon'"
+  command: "docker ps -q -a --filter='ancestor={{ ceph_docker_image }}:{{ ceph_docker_image_tag }}'"
   register: ceph_health
   changed_when: false
   failed_when: false
+  always_run: true
 
 - name: check if it is Atomic host
   stat: path=/run/ostree-booted
   register: stat_ostree
+  always_run: true
 
 - name: set fact for using Atomic host
   set_fact:
@@ -17,15 +19,35 @@
   when:
     - ceph_health.rc != 0
     - not mon_containerized_deployment_with_kv
+    - not "{{ rolling_update | default(false) }}"
 
 - include: pre_requisite.yml
+  when: not is_atomic
+
+- include: "{{ playbook_dir }}/roles/ceph-common/tasks/misc/ntp_atomic.yml"
+  when:
+    - is_atomic
+    - ansible_os_family == 'RedHat'
+    - ntp_service_enabled
+
+- include: "{{ playbook_dir }}/roles/ceph-common/tasks/misc/ntp_redhat.yml"
+  when:
+    - not is_atomic
+    - ansible_os_family == 'RedHat'
+    - ntp_service_enabled
+
+- include: "{{ playbook_dir }}/roles/ceph-common/tasks/misc/ntp_debian.yml"
+  when:
+    - ansible_os_family == 'Debian'
+    - ntp_service_enabled
+
+- include: "{{ playbook_dir }}/roles/ceph-common/tasks/docker/fetch_image.yml"
 
 - include: dirs_permissions.yml
 
 # let the first mon create configs and keyrings
 - include: create_configs.yml
   when:
-    - inventory_hostname == groups.mons[0]
     - not mon_containerized_default_ceph_conf_with_kv
 
 - include: fetch_configs.yml
@@ -36,13 +58,29 @@
 
 - include: start_docker_monitor.yml
 
+- name: wait for monitor socket to exist
+  command: docker exec {{ ansible_hostname }} stat /var/run/ceph/{{ cluster }}-mon.{{ ansible_hostname }}.asok
+  register: monitor_socket
+  retries: 5
+  delay: 10
+  until: monitor_socket.rc == 0
+
+- name: force peer addition as potential bootstrap peer for cluster bringup
+  command: docker exec {{ ansible_hostname }} ceph --admin-daemon /var/run/ceph/{{ cluster }}-mon.{{ ansible_hostname }}.asok add_bootstrap_peer_hint {{ hostvars[item]['ansible_' + ceph_mon_docker_interface].ipv4.address }}
+  with_items: "{{ groups.mons }}"
+  changed_when: false
+  failed_when: false
+  when:
+    - inventory_hostname == groups.mons[0]
+    - not mon_containerized_deployment_with_kv
+
 - include: copy_configs.yml
   when: not mon_containerized_deployment_with_kv
 
 - name: create ceph rest api keyring when mon is containerized
-  command: docker exec {{ ansible_hostname }} ceph auth get-or-create client.restapi osd 'allow *' mon 'allow *' -o /etc/ceph/ceph.client.restapi.keyring
+  command: docker exec {{ ansible_hostname }} ceph --cluster {{ cluster }} auth get-or-create client.restapi osd 'allow *' mon 'allow *' -o /etc/ceph/{{ cluster }}.client.restapi.keyring
   args:
-     creates: /etc/ceph/ceph.client.restapi.keyring
+     creates: /etc/ceph/{{ cluster }}.client.restapi.keyring
   changed_when: false
   when:
     - cephx

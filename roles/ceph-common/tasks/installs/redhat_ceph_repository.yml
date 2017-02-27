@@ -5,55 +5,43 @@
     state: present
   when: ceph_stable
 
-- name: install the ceph development repository key
-  rpm_key:
-    key: "{{ ceph_dev_key }}"
+- name: add ceph stable repository
+  yum_repository:
+    name: ceph_stable
+    description: Ceph Stable repo
+    gpgcheck: yes
     state: present
+    gpgkey: "{{ ceph_stable_key }}"
+    baseurl: "{{ ceph_mirror }}/rpm-{{ ceph_stable_release }}/{{ ceph_stable_redhat_distro }}/$basearch"
+  when: ceph_stable
+
+# we must use curl instead of ansible's uri module because SNI support in
+# Python is only available in 2.7.9 and later, and most supported distributions
+# don't have that version, so a request to https fails.
+- name: fetch ceph development repo file
+  command: 'curl -L https://shaman.ceph.com/api/repos/ceph/{{ ceph_dev_branch }}/{{ ceph_dev_sha1 }}/{{ ansible_distribution | lower }}/{{ ansible_distribution_major_version }}/repo'
+  register: ceph_dev_yum_repo
   when: ceph_dev
 
-- name: install inktank ceph enterprise repository key
-  rpm_key:
-    key: "{{ ceph_stable_ice_temp_path }}/release.asc"
-    state: present
-  when: ceph_stable_ice
-
-- name: add ceph stable repository
-  yum:
-    name: http://download.ceph.com/rpm-{{ ceph_stable_release }}/{{ ceph_stable_redhat_distro }}/noarch/ceph-release-1-0.{{ ceph_stable_redhat_distro|replace('rhel', 'el') }}.noarch.rpm
-  changed_when: false
-  when:
-    - ceph_stable
-    - ansible_pkg_mgr == "yum"
-
-- name: add ceph stable repository
-  dnf:
-    name: http://download.ceph.com/rpm-{{ ceph_stable_release }}/{{ ceph_stable_redhat_distro }}/noarch/ceph-release-1-0.{{ ceph_stable_redhat_distro|replace('rhel', 'el') }}.noarch.rpm
-  changed_when: false
-  when:
-    - ceph_stable
-    - ansible_pkg_mgr == "dnf"
-
 - name: add ceph development repository
-  yum:
-    name: http://gitbuilder.ceph.com/ceph-rpm-{{ ceph_dev_redhat_distro }}-x86_64-basic/ref/{{ ceph_dev_branch }}/noarch/ceph-release-1-0.{{ ceph_stable_redhat_distro }}.noarch.rpm
-  changed_when: false
-  when:
-    - ceph_dev
-    - ansible_pkg_mgr == "yum"
-
-- name: add ceph development repository
-  dnf:
-    name: http://gitbuilder.ceph.com/ceph-rpm-{{ ceph_dev_redhat_distro }}-x86_64-basic/ref/{{ ceph_dev_branch }}/noarch/ceph-release-1-0.{{ ceph_stable_redhat_distro }}.noarch.rpm
-  changed_when: false
-  when:
-    - ceph_dev
-    - ansible_pkg_mgr == "dnf"
-
-- name: add inktank ceph enterprise repository
-  template:
-    src: redhat_ice_repo.j2
-    dest: /etc/yum.repos.d/ice.repo
+  copy:
+    content: "{{ ceph_dev_yum_repo.stdout }}"
+    dest: /etc/yum.repos.d/ceph-dev.repo
     owner: root
     group: root
-    mode: 0644
-  when: ceph_stable_ice
+    backup: yes
+  when: ceph_dev
+
+- name: add custom repo
+  get_url:
+    url: "{{ ceph_custom_repo }}"
+    dest: /etc/yum.repos.d
+    owner: root
+    group: root
+  when: ceph_custom
+
+# Remove yum caches so yum doesn't get confused if we are reinstalling a different ceph version
+- name: purge yum cache
+  command: yum clean all
+  when:
+    ansible_pkg_mgr == 'yum'

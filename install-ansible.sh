@@ -5,6 +5,13 @@
 
 set -e
 
+if ansible --version &> /dev/null ; then
+  echo "Ansible is already installed."
+  echo "Doing nothing."
+  echo "Exiting now."
+  exit 0
+fi
+
 if [[ $EUID -ne 0 ]]; then
     echo "You are NOT running this script as root."
     echo "You should."
@@ -35,6 +42,7 @@ if [[ "Debian" =~ $os_VENDOR ]]; then
   pip install PyYAML jinja2 paramiko
   git clone https://github.com/ansible/ansible.git
   cd ansible
+  git submodule update --init --recursive
   make install
   mkdir /etc/ansible
 elif [[ "Ubuntu" =~ $os_VENDOR || "LinuxMint" =~ $os_VENDOR ]]; then
